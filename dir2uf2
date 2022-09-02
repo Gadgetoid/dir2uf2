@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+SRC_DIR=$2
+DST_DIR="$1.temp"
+
+function create_directory {
+  echo "> creating directory $1"
+  mkdir -p $DST_DIR/$1
+}
+
+function copy {
+  for file in $1
+  do
+    echo "> copying $file to $DST_DIR/$2"
+    cp $SRC_DIR/$file $DST_DIR/$2
+  done
+}
+
+create_directory enviro
+create_directory enviro/boards
+create_directory enviro/destinations
+create_directory enviro/html
+create_directory enviro/html/images
+create_directory phew
+create_directory phew/phew
+
+copy "main.py" 
+
+copy "enviro/*.py" enviro/
+
+copy "enviro/boards/*.py" enviro/boards/
+copy "enviro/destinations/*.py" enviro/destinations/
+
+copy "enviro/html/*.html" enviro/html/
+
+copy "enviro/html/images/*" enviro/html/images/
+
+copy "phew/__init__.py" phew/
+copy "phew/phew/*.py" phew/phew/
+
+
+python3 mkfsimg.py --img-filename $1.bin --img-size=868352 --read-size=256 --prog-size=256 $DST_DIR
+
+python3 uf2conv.py $1.bin --base 0x1012c000 --family RP2040 --convert --output $1.uf2
+
+echo "Created $1.bin"
+echo "Created $1.uf2"
+
+rm -r $DST_DIR
