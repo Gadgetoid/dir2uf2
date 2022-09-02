@@ -38,12 +38,12 @@ def convert_to_uf2(file_content):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--filename", default="filesystem", help="Output filename")
-parser.add_argument("--block-size", type=int, default=4096)
-parser.add_argument("--read-size", type=int, default=256)
-parser.add_argument("--prog-size", type=int, default=32)
-parser.add_argument("--manifest", default=None)
-parser.add_argument("source_dir")
+parser.add_argument("--filename", default="filesystem", help="Output filename.")
+parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
+parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
+parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
+parser.add_argument("--manifest", default=None, help="Manifest to filter copied files.")
+parser.add_argument("source_dir", help="Source directory.")
 args = parser.parse_args()
 
 block_count = APP_SIZE / args.block_size
