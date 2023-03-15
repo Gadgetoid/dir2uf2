@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 import argparse
 import struct
 import pathlib
@@ -77,6 +78,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help="Output filename.")
 parser.add_argument("--fs-start", type=int, default=FS_START_ADDR, help="Filesystem offset.")
 parser.add_argument("--fs-size", type=int, default=FS_SIZE, help="Filesystem size.")
+parser.add_argument("--fs-truncate", action="store_true", help="Truncate filesystem to used bytes.")
 parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
 parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
 parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
@@ -129,9 +131,9 @@ else:
     # Copy files/globs listed in the manifest relative to the source dir
     todo = open(args.manifest, "r").read().split("\n")
     for item in todo:
-        dir = pathlib.Path(item).parent
+        parent_dir = pathlib.Path(item).parent
         try:
-            lfs.mkdir(str(dir))
+            lfs.mkdir(str(parent_dir))
         except FileExistsError:
             pass
         copy_files(source_dir.glob(item))
@@ -139,9 +141,14 @@ else:
 
 # Write a .bin with *just* the filesystem
 bin_filename = output_filename.with_suffix(".bin")
+lfs_used_bytes = len(lfs.context.buffer)
+
+if args.fs_truncate:
+    lfs_used_bytes = math.ceil(lfs.stat("/").size // args.block_size) * args.block_size
+    print(f"Truncating LittleFS to {lfs_used_bytes / 1024}K.")
 
 with open(bin_filename, "wb") as f:
-    f.write(lfs.context.buffer)
+    f.write(lfs.context.buffer[:lfs_used_bytes])
 
 print(f"Written: {bin_filename}")
 
@@ -150,7 +157,7 @@ print(f"Written: {bin_filename}")
 uf2_filename = output_filename.with_suffix(".uf2")
 
 with open(uf2_filename, "wb") as f:
-    for block in bin_to_uf2([(FS_START_ADDR, lfs.context.buffer)]):
+    for block in bin_to_uf2([(FS_START_ADDR, lfs.context.buffer[:lfs_used_bytes])]):
         f.write(block)
 
 print(f"Written: {uf2_filename}")
@@ -187,7 +194,7 @@ if args.append_to is not None:
     data = data.ljust(fw_size, b"\xff")
 
     # Add our filesystem onto the data
-    data += lfs.context.buffer
+    data += lfs.context.buffer[:lfs_used_bytes]
 
     # Pack data into a uf2 at offset start_addr
     # This will be FS_START_ADDR if we're not appending.
