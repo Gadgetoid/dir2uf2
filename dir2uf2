@@ -89,7 +89,7 @@ parser.add_argument("--verbose", action="store_true", help="Verbose output.")
 parser.add_argument("source_dir", type=pathlib.Path, help="Source directory.")
 args = parser.parse_args()
 
-block_count = args.fs_size / args.block_size
+block_count = math.ceil(args.fs_size / args.block_size)
 if block_count * args.block_size != args.fs_size:
     print("image size should be a multiple of block size")
     exit(1)
