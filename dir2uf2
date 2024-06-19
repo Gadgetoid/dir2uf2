@@ -5,6 +5,7 @@ import argparse
 import struct
 import pathlib
 import littlefs
+from py_decl import PyDecl, UF2Reader
 
 
 UF2_MAGIC_START0 = 0x0A324655  # "UF2\n"
@@ -76,8 +77,8 @@ def bin_to_uf2(sections):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help="Output filename.")
-parser.add_argument("--fs-start", type=int, default=FS_START_ADDR, help="Filesystem offset.")
-parser.add_argument("--fs-size", type=int, default=FS_SIZE, help="Filesystem size.")
+parser.add_argument("--fs-start", type=int, default=None, help="Filesystem offset.")
+parser.add_argument("--fs-size", type=int, default=None, help="Filesystem size.")
 parser.add_argument("--fs-truncate", action="store_true", help="Truncate filesystem to used bytes.")
 parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
 parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
@@ -88,6 +89,22 @@ parser.add_argument("--debug", action="store_true", help="Debug output.")
 parser.add_argument("--verbose", action="store_true", help="Verbose output.")
 parser.add_argument("source_dir", type=pathlib.Path, help="Source directory.")
 args = parser.parse_args()
+
+if args.fs_start is None or args.fs_size is None:
+    if args.append_to is None:
+        raise argparse.ArgumentError("Either an --append-to UF2 file or explicit --fs-start and --fs-size required!")
+
+    if not args.append_to.is_file():
+        raise RuntimeError(f"Could not find {args.append_to}")
+
+    py_decl = PyDecl(UF2Reader(args.append_to))
+    parsed = py_decl.parse()
+    block_devices = parsed.get("BlockDevice", [])
+    for block_device in block_devices:
+        args.fs_start = block_device.get("address")
+        args.fs_size = block_device.get("size")
+        print(f"Auto detected fs: 0x{args.fs_start:08x} ({args.fs_start}), {args.fs_size} bytes.")
+        break
 
 block_count = math.ceil(args.fs_size / args.block_size)
 if block_count * args.block_size != args.fs_size:
@@ -157,7 +174,7 @@ print(f"Written: {bin_filename}")
 uf2_filename = output_filename.with_suffix(".uf2")
 
 with open(uf2_filename, "wb") as f:
-    for block in bin_to_uf2([(FS_START_ADDR, lfs.context.buffer[:lfs_used_bytes])]):
+    for block in bin_to_uf2([(args.fs_start, lfs.context.buffer[:lfs_used_bytes])]):
         f.write(block)
 
 print(f"Written: {uf2_filename}")
