@@ -1,0 +1,2 @@
+Cython==0.29.37
+littlefs-python==0.4.0
