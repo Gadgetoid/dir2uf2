@@ -179,14 +179,14 @@ if args.fs_compact:
 
     lfs_compact.fs_grow(block_count)
 
-    data = lfs_compact.context.buffer
+    lfs_data = lfs_compact.context.buffer
 
 else:
-    data = lfs.context.buffer
+    lfs_data = lfs.context.buffer
 
 
 with open(bin_filename, "wb") as f:
-    f.write(data)
+    f.write(lfs_data)
 
 print(f"Written: {bin_filename}")
 
@@ -195,7 +195,7 @@ print(f"Written: {bin_filename}")
 uf2_filename = output_filename.with_suffix(".uf2")
 
 with open(uf2_filename, "wb") as f:
-    for block in bin_to_uf2([(args.fs_start, lfs.context.buffer[:lfs_used_bytes])]):
+    for block in bin_to_uf2([(args.fs_start, lfs_data)]):
         f.write(block)
 
 print(f"Written: {uf2_filename}")
@@ -232,7 +232,7 @@ if args.append_to is not None:
     data = data.ljust(fw_size, b"\xff")
 
     # Add our filesystem onto the data
-    data += lfs.context.buffer[:lfs_used_bytes]
+    data += lfs_data
 
     # Pack data into a uf2 at offset start_addr
     # This will be FS_START_ADDR if we're not appending.
