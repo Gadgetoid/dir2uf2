@@ -9,16 +9,16 @@ Needs LittleFS-Python:
 
 ## Current Limitations
 
-Only supports the Pico W:
-
-- Fixed filesystem size of 848k
-- Fixed offset 0x1012c000 (flash starts at 0x10000000)
 - Outputs .uf2 with Pico family ID (non-generic, blocked from flashing to other boards???)
+- Only compatible with MicroPython >= 1.23.0
 
 ## Usage
 
 ```
-usage: dir2uf2 [-h] [--filename FILENAME] [--block-size BLOCK_SIZE] [--read-size READ_SIZE] [--prog-size PROG_SIZE] [--manifest MANIFEST] source_dir
+usage: dir2uf2 [-h] [--filename FILENAME] [--fs-start FS_START] [--fs-size FS_SIZE] [--fs-compact] [--block-size BLOCK_SIZE]
+               [--read-size READ_SIZE] [--prog-size PROG_SIZE] [--manifest MANIFEST] [--append-to APPEND_TO] [--debug]
+               [--verbose]
+               source_dir
 
 positional arguments:
   source_dir            Source directory.
@@ -26,6 +26,9 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --filename FILENAME   Output filename.
+  --fs-start FS_START   Filesystem offset.
+  --fs-size FS_SIZE     Filesystem size.
+  --fs-compact          Compact filesystem to used blocks.
   --block-size BLOCK_SIZE
                         LFS block size in Kb.
   --read-size READ_SIZE
@@ -33,7 +36,11 @@ options:
   --prog-size PROG_SIZE
                         LFS prog size in Kb.
   --manifest MANIFEST   Manifest to filter copied files.
-  ```
+  --append-to APPEND_TO
+                        uf2 file to append filesystem.
+  --debug               Debug output.
+  --verbose             Verbose output.
+```
 
 ## Examples
 
@@ -47,4 +54,10 @@ Copy entire dir:
 
 ```
 ./dir2uf2 ~/Downloads/enviro-0.0.5
+```
+
+Compact filesystem for a (sometimes *much*) smaller .uf2:
+
+```
+./dir2uf2 --fs-compact ~/Downloads/enviro-0.0.5
 ```
