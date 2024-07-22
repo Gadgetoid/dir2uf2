@@ -89,6 +89,7 @@ parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help=
 parser.add_argument("--fs-start", type=int, default=None, help="Filesystem offset.")
 parser.add_argument("--fs-size", type=int, default=None, help="Filesystem size.")
 parser.add_argument("--fs-compact", action="store_true", help="Compact filesystem to used blocks.")
+parser.add_argument("--sparse", action="store_true", help="Skip padding between app and filesystem.")
 parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
 parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
 parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
@@ -221,6 +222,8 @@ if args.append_to is not None:
 
         sections = uf2_to_bin(append_to)
 
+        fs_family_id = None
+
         for section in sections:
             section_index, start_addr, family_id, flags, num_blocks, block_data = section
 
@@ -232,22 +235,26 @@ if args.append_to is not None:
             # If the section family ID matches RP2040 or RP2350 then append
             # our littlefs filesystem to that specific block.
             if family_id in (FAMILY_ID_RP2040, FAMILY_ID_RP2350):
-                # Figure out how much padding we need
-                fw_size = args.fs_start - start_addr
+                fs_family_id = family_id
 
-                # Pad the supplied firmware up to our filesystem range
-                # We *could* create a .uf2 without this padding, supplying the
-                # firmware & filesystem blocks with different range offsets.
-                # However while this works fine in Picotool - which detects
-                # and writes each sequential range of data - it completely
-                # fails to write the second set (filesystem) in the RP2040
-                # bootloader.
-                # So, humph, we'll just pad and concat the two which makes
-                # for a bigger, but actually compatible .uf2.
+                if args.sparse:
+                    # Attempt to create a spare .uf2 without a zero fill between
+                    # the app and filesystem. Be careful to avoid RP2040 errata
+                    # E14 where non-block-aligned sparse .uf2s would not be
+                    # correctly written.
+                    fw_size = len(block_data)
+                    fw_size /= float(BLOCK_SIZE)
+                    fw_size = math.ceil(fw_size) * BLOCK_SIZE
+                else:
+                    # Figure out how much padding we need
+                    fw_size = args.fs_start - start_addr
+
+                # Pad the supplied firmware to the desired range
                 block_data = block_data.ljust(fw_size, b"\xff")
 
-                # Add our filesystem onto the data
-                block_data += lfs_data
+                # Concat our filesystem onto the data if we're not sparse
+                if not args.sparse:
+                    block_data += lfs_data
 
             # Reshuffle the section into the format expected by bin_to_uf2
             # and append it to our list of output sections
@@ -255,6 +262,15 @@ if args.append_to is not None:
                 start_addr,
                 block_data,
                 family_id,
+                flags
+            ))
+
+        if args.sparse:
+            # Add an additional section for our filesystem
+            output_sections.append((
+                args.fs_start,
+                lfs_data,
+                fs_family_id,
                 flags
             ))
 
