@@ -80,6 +80,7 @@ parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help=
 parser.add_argument("--fs-start", type=int, default=None, help="Filesystem offset.")
 parser.add_argument("--fs-size", type=int, default=None, help="Filesystem size.")
 parser.add_argument("--fs-compact", action="store_true", help="Compact filesystem to used blocks.")
+parser.add_argument("--no-uf2-padding", action="store_true", help="Compact uf2 by skipping zero padding. Must be flashed with Picotool.")
 parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
 parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
 parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
@@ -220,16 +221,17 @@ if args.append_to is not None:
     # Figure out how much padding we need
     fw_size = args.fs_start - start_addr
 
-    # Pad the supplied firmware up to our filesystem range
-    # We *could* create a .uf2 without this padding, supplying the
-    # firmware & filesystem blocks with different range offsets.
-    # However while this works fine in Picotool - which detects
-    # and writes each sequential range of data - it completely
-    # fails to write the second set (filesystem) in the RP2040
-    # bootloader.
-    # So, humph, we'll just pad and concat the two which makes
-    # for a bigger, but actually compatible .uf2.
-    data = data.ljust(fw_size, b"\xff")
+    if not args.no_uf2_padding:
+        # Pad the supplied firmware up to our filesystem range
+        # We *could* create a .uf2 without this padding, supplying the
+        # firmware & filesystem blocks with different range offsets.
+        # However while this works fine in Picotool - which detects
+        # and writes each sequential range of data - it completely
+        # fails to write the second set (filesystem) in the RP2040
+        # bootloader.
+        # So, humph, we'll just pad and concat the two which makes
+        # for a bigger, but actually compatible .uf2.
+        data = data.ljust(fw_size, b"\xff")
 
     # Add our filesystem onto the data
     data += lfs_data
