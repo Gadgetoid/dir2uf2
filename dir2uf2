@@ -118,17 +118,16 @@ lfs = littlefs.LittleFS(
     prog_size=args.prog_size,
 )
 
-source_dir = args.source_dir
 output_filename = args.filename
 
 
-def copy_files(lfs, todo):
+def copy_files(lfs, todo, source_dir):
     for src in todo:
         if src.is_dir():
             dst = src.relative_to(source_dir)
             if args.verbose:
                 print(f"- mkdir: {dst}")
-            lfs.mkdir(str(dst))
+            lfs.makedirs(str(dst), exist_ok=True)
         if src.is_file():
             dst = src.relative_to(source_dir)
             if args.verbose:
@@ -138,11 +137,11 @@ def copy_files(lfs, todo):
                     outfile.write(infile.read())
 
 
-def copy_manifest_or_dir(lfs):
+def copy_manifest_or_dir(lfs, source_dir):
     if args.manifest is None:
-        print(f"Copying directory: {args.source_dir}")
+        print(f"Copying directory: {source_dir}")
         # Walk the entire source dir and copy *everything*
-        copy_files(lfs, source_dir.glob("**/*"))
+        copy_files(lfs, source_dir.glob("**/*"), source_dir)
 
     else:
         print(f"Using manifest: {args.manifest}")
@@ -150,14 +149,11 @@ def copy_manifest_or_dir(lfs):
         todo = open(args.manifest, "r").read().split("\n")
         for item in todo:
             parent_dir = pathlib.Path(item).parent
-            try:
-                lfs.mkdir(str(parent_dir))
-            except FileExistsError:
-                pass
-            copy_files(lfs, source_dir.glob(item))
+            lfs.makedirs(str(parent_dir), exist_ok=True)
+            copy_files(lfs, source_dir.glob(item), source_dir)
 
 
-copy_manifest_or_dir(lfs)
+copy_manifest_or_dir(lfs, args.source_dir)
 
 # Write a .bin with *just* the filesystem
 bin_filename = output_filename.with_suffix(".bin")
@@ -175,7 +171,7 @@ if args.fs_compact:
         prog_size=args.prog_size,
     )
 
-    copy_manifest_or_dir(lfs_compact)
+    copy_manifest_or_dir(lfs_compact, args.source_dir)
 
     lfs_compact.fs_grow(block_count)
 
