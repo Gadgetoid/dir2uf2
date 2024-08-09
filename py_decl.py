@@ -135,7 +135,9 @@ class UF2Reader(io.BytesIO):
     def uf2_to_bin(self, filepath):
         file = open(filepath, "rb")
         while data := file.read(BLOCK_SIZE):
-            # start0, start1, flags, addr, size, block_no, num_blocks, family_id = struct.unpack(b"<IIIIIIII", data[:HEADER_SIZE])
+            start0, start1, flags, addr, size, block_no, num_blocks, family_id = struct.unpack("IIIIIIII", data[0:HEADER_SIZE])
+            if num_blocks == 2:  # TODO: Figure out what this extra block up-front is for
+                continue
             yield data[HEADER_SIZE:HEADER_SIZE + DATA_SIZE]
 
 
