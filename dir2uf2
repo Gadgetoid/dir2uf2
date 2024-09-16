@@ -12,9 +12,13 @@ from py_decl import PyDecl, UF2Reader
 UF2_MAGIC_START0 = 0x0A324655  # "UF2\n"
 UF2_MAGIC_START1 = 0x9E5D5157  # Randomly selected
 UF2_MAGIC_END    = 0x0AB16F30  # Ditto
-FAMILY_ID        = 0xe48bff56  # RP2040
 FS_START_ADDR    = 0x1012c000  # Pico W MicroPython LFSV2 offset
 FS_SIZE          = 848 * 1024
+
+
+FAMILY_ID_RP2040 = 0xe48bff56  # RP2040
+FAMILY_ID_PAD    = 0xe48bff57  # ???
+FAMILY_ID_RP2350 = 0xe48bff59  # RP2350
 
 BLOCK_SIZE = 512
 DATA_SIZE = 256
@@ -24,13 +28,17 @@ PADDING_SIZE = BLOCK_SIZE - DATA_SIZE - HEADER_SIZE - FOOTER_SIZE
 DATA_PADDING = b"\x00" * PADDING_SIZE
 
 
-def uf2_to_bin(data):
+def uf2_to_bin(data, valid_family_ids=None):
+    valid_family_ids = valid_family_ids or (FAMILY_ID_RP2040, FAMILY_ID_RP2350)
+
     for offset in range(0, len(data), BLOCK_SIZE):
         start0, start1, flags, addr, size, block_no, num_blocks, family_id = struct.unpack(b"<IIIIIIII", data[offset:offset + HEADER_SIZE])
         if args.debug:
             print(f"Block {block_no}/{num_blocks} addr {addr:08x} size {size}")
         block_data = data[offset + HEADER_SIZE:offset + HEADER_SIZE + DATA_SIZE]
-        yield addr, block_data
+        if family_id not in valid_family_ids:
+            continue
+        yield addr, family_id, num_blocks, block_data
 
 
 def bin_to_uf2(sections):
@@ -38,11 +46,9 @@ def bin_to_uf2(sections):
     block_no = 0
 
     for section in sections:
-        offset, data = section
-        total_blocks += (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
+        offset, data, family_id = section
 
-    for section in sections:
-        offset, data = section
+        total_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
 
         if args.debug:
             print(f"uf2: Adding {len(data)} bytes at 0x{offset:08x}")
@@ -50,8 +56,7 @@ def bin_to_uf2(sections):
         num_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
 
         flags = 0x0
-        if FAMILY_ID:
-            flags |= 0x2000
+        flags |= 0x2000
 
         for index in range(num_blocks):
             ptr = DATA_SIZE * index
@@ -62,7 +67,7 @@ def bin_to_uf2(sections):
                 b"<IIIIIIII",
                 UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
                 ptr + offset, DATA_SIZE, block_no, total_blocks,
-                FAMILY_ID)
+                family_id)
 
             footer = struct.pack(b"<I", UF2_MAGIC_END)
 
@@ -193,7 +198,7 @@ print(f"Written: {bin_filename}")
 uf2_filename = output_filename.with_suffix(".uf2")
 
 with open(uf2_filename, "wb") as f:
-    for block in bin_to_uf2([(args.fs_start, lfs_data)]):
+    for block in bin_to_uf2([(args.fs_start, lfs_data, FAMILY_ID_RP2040)]):
         f.write(block)
 
 print(f"Written: {uf2_filename}")
@@ -207,35 +212,42 @@ if args.append_to is not None:
 
     print(f"Appending to {args.append_to}")
 
-    append_to = open(args.append_to, "rb").read()
-
-    # Read the first block address, this will be the base offset
-    start_addr = next(uf2_to_bin(append_to))[0]
-
-    # Read the .uf2 contents to binary
-    data = b"".join(map(lambda b: b[1], uf2_to_bin(append_to)))
-
-    # Figure out how much padding we need
-    fw_size = args.fs_start - start_addr
-
-    # Pad the supplied firmware up to our filesystem range
-    # We *could* create a .uf2 without this padding, supplying the
-    # firmware & filesystem blocks with different range offsets.
-    # However while this works fine in Picotool - which detects
-    # and writes each sequential range of data - it completely
-    # fails to write the second set (filesystem) in the RP2040
-    # bootloader.
-    # So, humph, we'll just pad and concat the two which makes
-    # for a bigger, but actually compatible .uf2.
-    data = data.ljust(fw_size, b"\xff")
-
-    # Add our filesystem onto the data
-    data += lfs_data
-
-    # Pack data into a uf2 at offset start_addr
-    # This will be FS_START_ADDR if we're not appending.
     with open(uf2_append_filename, "wb") as f:
-        for block in bin_to_uf2([(start_addr, data)]):
+        append_to = open(args.append_to, "rb").read()
+
+        # HACK: Write the weird two block section from the front of RP2350 UF2s
+        try:
+            _, _, num_blocks, _ = next(uf2_to_bin(append_to, valid_family_ids=(FAMILY_ID_PAD, )))
+            f.write(append_to[0: num_blocks * BLOCK_SIZE])
+        except StopIteration:
+            pass
+
+        # Read the first block address, this will be the base offset
+        start_addr, family_id, num_blocks, _ = next(uf2_to_bin(append_to))
+
+        # Read the .uf2 contents to binary
+        data = b"".join(map(lambda b: b[3], uf2_to_bin(append_to)))
+
+        # Figure out how much padding we need
+        fw_size = args.fs_start - start_addr
+
+        # Pad the supplied firmware up to our filesystem range
+        # We *could* create a .uf2 without this padding, supplying the
+        # firmware & filesystem blocks with different range offsets.
+        # However while this works fine in Picotool - which detects
+        # and writes each sequential range of data - it completely
+        # fails to write the second set (filesystem) in the RP2040
+        # bootloader.
+        # So, humph, we'll just pad and concat the two which makes
+        # for a bigger, but actually compatible .uf2.
+        data = data.ljust(fw_size, b"\xff")
+
+        # Add our filesystem onto the data
+        data += lfs_data
+
+        # Pack data into a uf2 at offset start_addr
+        # This will be FS_START_ADDR if we're not appending.
+        for block in bin_to_uf2([(start_addr, data, family_id)]):
             f.write(block)
 
-    print(f"Written: {uf2_append_filename}")
+        print(f"Written: {uf2_append_filename}")
