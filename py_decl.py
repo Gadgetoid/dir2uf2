@@ -10,8 +10,10 @@ DEBUG = False
 UF2_MAGIC_START0 = 0x0A324655  # "UF2\n"
 UF2_MAGIC_START1 = 0x9E5D5157  # Randomly selected
 UF2_MAGIC_END    = 0x0AB16F30  # Ditto
-FAMILY_ID        = 0xe48bff56  # RP2040
-FS_START_ADDR    = 0x1012c000  # Pico W MicroPython LFSV2 offset
+
+FAMILY_ID_RP2040 = 0xe48bff56  # RP2040
+FAMILY_ID_PAD    = 0xe48bff57  # ???
+FAMILY_ID_RP2350 = 0xe48bff59  # RP2350
 
 FLASH_START_ADDR = 0x10000000
 
@@ -129,17 +131,44 @@ class MemoryReader():
 
 class UF2Reader(io.BytesIO):
     def __init__(self, filepath):
-        bin = b"".join(self.uf2_to_bin(filepath))
+        sections = self.uf2_to_bin(filepath)
+        bin = b""
+        for section in sections:
+            section_index, start_addr, family_id, flags, num_blocks, block_data = section
+            if family_id in (FAMILY_ID_RP2040, FAMILY_ID_RP2350):
+                bin = block_data
+                break
         io.BytesIO.__init__(self, bin)
 
     def uf2_to_bin(self, filepath):
-        file = open(filepath, "rb")
+        with open(filepath, "rb") as file:
+            section_index = 0
+
+            while data := file.read(BLOCK_SIZE):
+                start0, start1, flags, addr, size, block_no, num_blocks, family_id = struct.unpack(b"<IIIIIIII", data[0:HEADER_SIZE])
+
+                if block_no == 0:
+                    # Seek back to the start of this block!
+                    file.seek(file.tell() - BLOCK_SIZE)
+                    # uf2_section_data is a generator but we must return a
+                    # list since the file is closed/out of scope.
+                    yield section_index, addr, family_id, flags, num_blocks, b"".join(self.uf2_section_data(file))
+                    section_index += 1
+
+    def uf2_section_data(self, file):
+        count = 0
         while data := file.read(BLOCK_SIZE):
-            start0, start1, flags, addr, size, block_no, num_blocks, family_id = struct.unpack("IIIIIIII", data[0:HEADER_SIZE])
-            if num_blocks == 2:  # TODO: Figure out what this extra block up-front is for
-                continue
+            start0, start1, flags, addr, size, block_no, num_blocks, family_id = struct.unpack(b"<IIIIIIII", data[0:HEADER_SIZE])
+
+            if block_no == 0 and count > 0:
+                # We've run into the next section...
+                # Seek back to the start of this block!
+                file.seek(file.tell() - BLOCK_SIZE)
+                break
+
             yield data[HEADER_SIZE:HEADER_SIZE + DATA_SIZE]
 
+            count += 1
 
 class PyDecl:
     def __init__(self, file, debug=False):
