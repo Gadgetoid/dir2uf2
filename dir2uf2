@@ -55,6 +55,7 @@ def bin_to_uf2(sections):
     for section in sections:
         offset, data, family_id, flags = section
 
+        # Ugly equivalent of math.ceil(len(data) / DATA_SIZE)
         num_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
 
         if args.debug:
@@ -71,7 +72,7 @@ def bin_to_uf2(sections):
             header = struct.pack(
                 b"<IIIIIIII",
                 UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
-                ptr + offset, DATA_SIZE, block_no, num_blocks + 1,
+                ptr + offset, DATA_SIZE, block_no, num_blocks + (1 if family_id == FAMILY_ID_PAD else 0),
                 family_id)
 
             footer = struct.pack(b"<I", UF2_MAGIC_END)
