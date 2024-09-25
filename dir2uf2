@@ -20,6 +20,8 @@ FAMILY_ID_RP2040 = 0xe48bff56  # RP2040
 FAMILY_ID_PAD    = 0xe48bff57  # ???
 FAMILY_ID_RP2350 = 0xe48bff59  # RP2350
 
+RP_FLASH_BLOCK_SIZE = 4096
+
 BLOCK_SIZE = 512
 DATA_SIZE = 256
 HEADER_SIZE = 32
@@ -53,35 +55,51 @@ def uf2_section_data(data):
 
 def bin_to_uf2(sections):
     for section in sections:
-        offset, data, family_id, flags = section
+        offsets, datas, family_id, flags = section
 
-        num_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
+        if not isinstance(offsets, (list, tuple)):
+            offsets = (offsets, )
+            datas = (datas, )
 
-        if args.debug:
-            print(f"uf2: Adding {len(data)} bytes at 0x{offset:08x}")
+        total_blocks = sum([(len(data) + (DATA_SIZE - 1)) // DATA_SIZE for data in datas])
 
-        for block_no in range(num_blocks):
-            ptr = DATA_SIZE * block_no
+        # HACK: If we don't use "num_blocks + 1" then the 0xe48bff57
+        # section at the top of RP2350 UF2 files will have a block count
+        # of 1 and simply not flash, at all. I don't know why this is.
+        if family_id == FAMILY_ID_PAD:
+            total_blocks += 1
 
-            chunk = data[ptr:ptr + DATA_SIZE].rjust(DATA_SIZE, b"\x00")
+        block_no = 0
 
-            # HACK: If we don't use "num_blocks + 1" then the 0xe48bff57
-            # section at the top of RP2350 UF2 files will have a block count
-            # of 1 and simply not flash, at all. I don't know why this is.
-            header = struct.pack(
-                b"<IIIIIIII",
-                UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
-                ptr + offset, DATA_SIZE, block_no, num_blocks + 1,
-                family_id)
+        for i in range(len(offsets)):
+            offset = offsets[i]
+            data = datas[i]
 
-            footer = struct.pack(b"<I", UF2_MAGIC_END)
+            num_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
 
-            block = header + chunk + DATA_PADDING + footer
+            if args.debug:
+                print(f"uf2: Adding {len(data)} bytes at 0x{offset:08x}")
 
-            if len(block) != BLOCK_SIZE:
-                raise RuntimeError("Invalid block size")
+            for block_index in range(num_blocks):
+                ptr = DATA_SIZE * block_index
 
-            yield block
+                chunk = data[ptr:ptr + DATA_SIZE].rjust(DATA_SIZE, b"\x00")
+                header = struct.pack(
+                    b"<IIIIIIII",
+                    UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
+                    ptr + offset, DATA_SIZE, block_no, total_blocks,
+                    family_id)
+
+                footer = struct.pack(b"<I", UF2_MAGIC_END)
+
+                block = header + chunk + DATA_PADDING + footer
+
+                block_no += 1
+
+                if len(block) != BLOCK_SIZE:
+                    raise RuntimeError("Invalid block size")
+
+                yield block
 
 
 parser = argparse.ArgumentParser()
@@ -89,6 +107,8 @@ parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help=
 parser.add_argument("--fs-start", type=int, default=None, help="Filesystem offset.")
 parser.add_argument("--fs-size", type=int, default=None, help="Filesystem size.")
 parser.add_argument("--fs-compact", action="store_true", help="Compact filesystem to used blocks.")
+parser.add_argument("--fs-overwrite", action="store_true", help="Replace an existing filesystem in the UF2.")
+parser.add_argument("--sparse", action="store_true", help="Skip padding between app and filesystem.")
 parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
 parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
 parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
@@ -221,42 +241,85 @@ if args.append_to is not None:
 
         sections = uf2_to_bin(append_to)
 
+        fs_family_id = None
+        fs_start = args.fs_start
+
         for section in sections:
             section_index, start_addr, family_id, flags, num_blocks, block_data = section
+            # For each section reshuffle the section into the format expected
+            # by bin_to_uf2 and append it to our list of output sections.
+            # In the case of flash sections, append the filesystem according to
+            # the given command-line options.
 
-            # Flatten the block data generator into binary data
+            # Flatten the block data generator
+            block_data = list(block_data)
+
+            # Grab the addresses from the block list and check they don't include
+            # our filesystem region.
+            block_addresses = map(lambda b: b[0], block_data)
+            if args.fs_start in block_addresses and not args.fs_overwrite:
+                raise RuntimeError("Trying to append over an existing filesystem!")
+
             # The generator returns the address and data chunk, but we're
             # assuming the addresses are contiguous and discarding them!
-            block_data = b"".join(map(lambda b: b[1], block_data))
+            # Discard any blocks >= to the filesystem start address, since
+            # if we hit this line and they exist they're getting replaced!
+            block_data = b"".join(b[1] for b in block_data if b[0] < args.fs_start)
 
             # If the section family ID matches RP2040 or RP2350 then append
             # our littlefs filesystem to that specific block.
             if family_id in (FAMILY_ID_RP2040, FAMILY_ID_RP2350):
-                # Figure out how much padding we need
-                fw_size = args.fs_start - start_addr
+                if args.sparse:
+                    # Attempt to create a spare .uf2 without a zero fill between
+                    # the app and filesystem. Be careful to avoid RP2040 errata
+                    # E14 where non-block-aligned sparse .uf2s would not be
+                    # correctly written.
+                    fw_size = len(block_data)
+                    fw_size /= float(RP_FLASH_BLOCK_SIZE)
+                    fw_size = math.ceil(fw_size) * RP_FLASH_BLOCK_SIZE
 
-                # Pad the supplied firmware up to our filesystem range
-                # We *could* create a .uf2 without this padding, supplying the
-                # firmware & filesystem blocks with different range offsets.
-                # However while this works fine in Picotool - which detects
-                # and writes each sequential range of data - it completely
-                # fails to write the second set (filesystem) in the RP2040
-                # bootloader.
-                # So, humph, we'll just pad and concat the two which makes
-                # for a bigger, but actually compatible .uf2.
-                block_data = block_data.ljust(fw_size, b"\xff")
+                    block_data = block_data.ljust(fw_size, b"\xff")
 
-                # Add our filesystem onto the data
-                block_data += lfs_data
+                    # Align the start of the filesystem to the next block
+                    fs_start -= start_addr
+                    fs_start /= float(RP_FLASH_BLOCK_SIZE)
+                    fs_start = math.ceil(fs_start) * RP_FLASH_BLOCK_SIZE
+                    fs_start += start_addr
+                    fs_padding = fs_start - args.fs_start
 
-            # Reshuffle the section into the format expected by bin_to_uf2
-            # and append it to our list of output sections
-            output_sections.append((
-                start_addr,
-                block_data,
-                family_id,
-                flags
-            ))
+                    lfs_data = lfs_data.rjust(len(lfs_data) + fs_padding, b"\xff")
+
+                    # Add our filesystem to the flash section
+                    output_sections.append((
+                        (start_addr, fs_start),
+                        (block_data, lfs_data),
+                        family_id,
+                        flags
+                    ))
+                else:
+                    # If we're not sparse, then pad from the end of our firmware
+                    # right up to the start of the filesystem
+                    fw_size = fs_start - start_addr
+                    block_data = block_data.ljust(fw_size, b"\xff")
+
+                    # Concat our filesystem onto the data
+                    output_sections.append((
+                        start_addr,
+                        start_addr + lfs_data,
+                        family_id,
+                        flags
+                    ))
+
+            # If the section family ID *dot not* match RP2040 or RP2350 then
+            # append this section unmangled. (Used for the first section in
+            # RP2350 UF2 files)
+            else:
+                output_sections.append((
+                    start_addr,
+                    block_data,
+                    family_id,
+                    flags
+                ))
 
         # Pack data into a uf2 at offset start_addr
         # This will be FS_START_ADDR if we're not appending.
