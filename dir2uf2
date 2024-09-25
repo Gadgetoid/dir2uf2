@@ -20,6 +20,8 @@ FAMILY_ID_RP2040 = 0xe48bff56  # RP2040
 FAMILY_ID_PAD    = 0xe48bff57  # ???
 FAMILY_ID_RP2350 = 0xe48bff59  # RP2350
 
+RP_FLASH_BLOCK_SIZE = 4096
+
 BLOCK_SIZE = 512
 DATA_SIZE = 256
 HEADER_SIZE = 32
@@ -239,6 +241,7 @@ if args.append_to is not None:
         sections = uf2_to_bin(append_to)
 
         fs_family_id = None
+        fs_start = args.fs_start
 
         for section in sections:
             section_index, start_addr, family_id, flags, num_blocks, block_data = section
@@ -258,11 +261,20 @@ if args.append_to is not None:
                     # E14 where non-block-aligned sparse .uf2s would not be
                     # correctly written.
                     fw_size = len(block_data)
-                    fw_size /= float(BLOCK_SIZE)
-                    fw_size = math.ceil(fw_size) * BLOCK_SIZE
+                    fw_size /= float(RP_FLASH_BLOCK_SIZE)
+                    fw_size = math.ceil(fw_size) * RP_FLASH_BLOCK_SIZE
+
+                    # Align the start of the filesystem to the next block
+                    fs_start -= start_addr
+                    fs_start /= float(RP_FLASH_BLOCK_SIZE)
+                    fs_start = math.ceil(fs_start) * RP_FLASH_BLOCK_SIZE
+                    fs_start += start_addr
+                    fs_padding = fs_start - args.fs_start
+
+                    lfs_data = lfs_data.rjust(len(lfs_data) + fs_padding, b"\xff")
                 else:
                     # Figure out how much padding we need
-                    fw_size = args.fs_start - start_addr
+                    fw_size = fs_start - start_addr
 
                 # Pad the supplied firmware to the desired range
                 block_data = block_data.ljust(fw_size, b"\xff")
@@ -274,9 +286,9 @@ if args.append_to is not None:
             # Reshuffle the section into the format expected by bin_to_uf2
             # and append it to our list of output sections
             if args.sparse and family_id in (FAMILY_ID_RP2040, FAMILY_ID_RP2350):
-                # Add an additional section for our filesystem
+                # Add our filesystem to the flash section
                 output_sections.append((
-                    (start_addr, args.fs_start),
+                    (start_addr, fs_start),
                     (block_data, lfs_data),
                     family_id,
                     flags
