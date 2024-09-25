@@ -53,36 +53,51 @@ def uf2_section_data(data):
 
 def bin_to_uf2(sections):
     for section in sections:
-        offset, data, family_id, flags = section
+        offsets, datas, family_id, flags = section
 
-        # Ugly equivalent of math.ceil(len(data) / DATA_SIZE)
-        num_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
+        if not isinstance(offsets, (list, tuple)):
+            offsets = (offsets, )
+            datas = (datas, )
 
-        if args.debug:
-            print(f"uf2: Adding {len(data)} bytes at 0x{offset:08x}")
+        total_blocks = sum([(len(data) + (DATA_SIZE - 1)) // DATA_SIZE for data in datas])
 
-        for block_no in range(num_blocks):
-            ptr = DATA_SIZE * block_no
+        # HACK: If we don't use "num_blocks + 1" then the 0xe48bff57
+        # section at the top of RP2350 UF2 files will have a block count
+        # of 1 and simply not flash, at all. I don't know why this is.
+        if family_id == FAMILY_ID_PAD:
+            total_blocks += 1
 
-            chunk = data[ptr:ptr + DATA_SIZE].rjust(DATA_SIZE, b"\x00")
+        block_no = 0
 
-            # HACK: If we don't use "num_blocks + 1" then the 0xe48bff57
-            # section at the top of RP2350 UF2 files will have a block count
-            # of 1 and simply not flash, at all. I don't know why this is.
-            header = struct.pack(
-                b"<IIIIIIII",
-                UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
-                ptr + offset, DATA_SIZE, block_no, num_blocks + (1 if family_id == FAMILY_ID_PAD else 0),
-                family_id)
+        for i in range(len(offsets)):
+            offset = offsets[i]
+            data = datas[i]
 
-            footer = struct.pack(b"<I", UF2_MAGIC_END)
+            num_blocks = (len(data) + (DATA_SIZE - 1)) // DATA_SIZE
 
-            block = header + chunk + DATA_PADDING + footer
+            if args.debug:
+                print(f"uf2: Adding {len(data)} bytes at 0x{offset:08x}")
 
-            if len(block) != BLOCK_SIZE:
-                raise RuntimeError("Invalid block size")
+            for block_index in range(num_blocks):
+                ptr = DATA_SIZE * block_index
 
-            yield block
+                chunk = data[ptr:ptr + DATA_SIZE].rjust(DATA_SIZE, b"\x00")
+                header = struct.pack(
+                    b"<IIIIIIII",
+                    UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
+                    ptr + offset, DATA_SIZE, block_no, total_blocks,
+                    family_id)
+
+                footer = struct.pack(b"<I", UF2_MAGIC_END)
+
+                block = header + chunk + DATA_PADDING + footer
+
+                block_no += 1
+
+                if len(block) != BLOCK_SIZE:
+                    raise RuntimeError("Invalid block size")
+
+                yield block
 
 
 parser = argparse.ArgumentParser()
@@ -236,7 +251,6 @@ if args.append_to is not None:
             # If the section family ID matches RP2040 or RP2350 then append
             # our littlefs filesystem to that specific block.
             if family_id in (FAMILY_ID_RP2040, FAMILY_ID_RP2350):
-                fs_family_id = family_id
 
                 if args.sparse:
                     # Attempt to create a spare .uf2 without a zero fill between
@@ -259,21 +273,21 @@ if args.append_to is not None:
 
             # Reshuffle the section into the format expected by bin_to_uf2
             # and append it to our list of output sections
-            output_sections.append((
-                start_addr,
-                block_data,
-                family_id,
-                flags
-            ))
-
-        if args.sparse:
-            # Add an additional section for our filesystem
-            output_sections.append((
-                args.fs_start,
-                lfs_data,
-                fs_family_id,
-                flags
-            ))
+            if args.sparse and family_id in (FAMILY_ID_RP2040, FAMILY_ID_RP2350):
+                # Add an additional section for our filesystem
+                output_sections.append((
+                    (start_addr, args.fs_start),
+                    (block_data, lfs_data),
+                    family_id,
+                    flags
+                ))
+            else:
+                output_sections.append((
+                    start_addr,
+                    block_data,
+                    family_id,
+                    flags
+                ))
 
         # Pack data into a uf2 at offset start_addr
         # This will be FS_START_ADDR if we're not appending.
