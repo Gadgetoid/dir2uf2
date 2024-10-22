@@ -305,7 +305,7 @@ if args.append_to is not None:
                     # Concat our filesystem onto the data
                     output_sections.append((
                         start_addr,
-                        start_addr + lfs_data,
+                        block_data + lfs_data,
                         family_id,
                         flags
                     ))
