@@ -176,7 +176,7 @@ def copy_manifest_or_dir(lfs, source_dir):
     else:
         print(f"Using manifest: {args.manifest}")
         # Copy files/globs listed in the manifest relative to the source dir
-        todo = open(args.manifest, "r").read().split("\n")
+        todo = [line.strip() for line in open(args.manifest, "r").readlines() if line.strip()]
         for item in todo:
             parent_dir = pathlib.Path(item).parent
             lfs.makedirs(str(parent_dir), exist_ok=True)
