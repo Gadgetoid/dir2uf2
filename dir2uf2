@@ -108,51 +108,7 @@ def print_size(size_bytes):
     return f"{size_bytes / 1024:.2f}Kb"
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help="Output filename.")
-parser.add_argument("--fs-target", default="MicroPython", help="Filesystem target block device name.")
-parser.add_argument("--fs-start", type=int, default=None, help="Filesystem offset.")
-parser.add_argument("--fs-size", type=int, default=None, help="Filesystem size.")
-parser.add_argument("--fs-compact", action="store_true", help="Compact filesystem to used blocks.")
-parser.add_argument("--fs-overwrite", action="store_true", help="Replace an existing filesystem in the UF2.")
-parser.add_argument("--sparse", action="store_true", help="Skip padding between app and filesystem.")
-parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
-parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
-parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
-parser.add_argument("--manifest", default=None, help="Manifest to filter copied files.")
-parser.add_argument("--append-to", type=pathlib.Path, default=None, help="uf2 file to append filesystem.")
-parser.add_argument("--debug", action="store_true", help="Debug output.")
-parser.add_argument("--verbose", action="store_true", help="Verbose output.")
-parser.add_argument("source_dir", type=pathlib.Path, help="Source directory or file.")
-args = parser.parse_args()
-
-if args.fs_start is None or args.fs_size is None:
-    if args.append_to is None:
-        raise argparse.ArgumentError(args.append_to, "Either an --append-to UF2 file or explicit --fs-start and --fs-size required!")
-
-    if not args.append_to.is_file():
-        raise RuntimeError(f"Could not find {args.append_to}")
-
-    py_decl = PyDecl(UF2Reader(args.append_to))
-    parsed = py_decl.parse()
-    block_devices = parsed.get("BlockDevice", [])
-    for block_device in block_devices:
-        if block_device.get("name") == args.fs_target:
-            args.fs_start = block_device.get("address")
-            args.fs_size = block_device.get("size")
-            print(f"Auto detected fs: {block_device.get("name")} 0x{args.fs_start:08x} ({args.fs_start}), {args.fs_size:,d} bytes ({print_size(args.fs_size)}).")
-            break
-
-block_count = math.ceil(args.fs_size / args.block_size)
-if block_count * args.block_size != args.fs_size:
-    print("image size should be a multiple of block size")
-    exit(1)
-
-output_filename = args.filename
-
-
-# Build a LittleFS filesystem by default if a directory is supplied
-if args.source_dir.is_dir():
+def lfs_filesystem(args):
     lfs = littlefs.LittleFS(
         block_size=args.block_size,
         block_count=block_count,
@@ -195,8 +151,6 @@ if args.source_dir.is_dir():
 
     copy_manifest_or_dir(lfs, args.source_dir)
 
-    # Write a .bin with *just* the filesystem
-    bin_filename = output_filename.with_suffix(".bin")
     lfs_used_bytes = len(lfs.context.buffer)
 
     if args.fs_compact:
@@ -215,11 +169,63 @@ if args.source_dir.is_dir():
 
         lfs_compact.fs_grow(block_count)
 
-        lfs_data = lfs_compact.context.buffer
+        return lfs_compact.context.buffer
 
-    else:
-        lfs_data = lfs.context.buffer
+    return lfs.context.buffer
 
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--filename", type=pathlib.Path, default="filesystem", help="Output filename.")
+parser.add_argument("--fs-target", default="MicroPython", help="Filesystem target block device name.")
+parser.add_argument("--fs-start", type=int, default=None, help="Filesystem offset.")
+parser.add_argument("--fs-size", type=int, default=None, help="Filesystem size.")
+parser.add_argument("--fs-compact", action="store_true", help="Compact filesystem to used blocks.")
+parser.add_argument("--fs-overwrite", action="store_true", help="Replace an existing filesystem in the UF2.")
+parser.add_argument("--fs-type", choices=("lfs",), default="lfs", help="Filesystem type.")
+parser.add_argument("--sparse", action="store_true", help="Skip padding between app and filesystem.")
+parser.add_argument("--block-size", type=int, default=4096, help="LFS block size in Kb.")
+parser.add_argument("--read-size", type=int, default=256, help="LFS read size in Kb.")
+parser.add_argument("--prog-size", type=int, default=32, help="LFS prog size in Kb.")
+parser.add_argument("--manifest", default=None, help="Manifest to filter copied files.")
+parser.add_argument("--append-to", type=pathlib.Path, default=None, help="uf2 file to append filesystem.")
+parser.add_argument("--debug", action="store_true", help="Debug output.")
+parser.add_argument("--verbose", action="store_true", help="Verbose output.")
+parser.add_argument("source_dir", type=pathlib.Path, help="Source directory or file.")
+args = parser.parse_args()
+
+if args.fs_start is None or args.fs_size is None:
+    if args.append_to is None:
+        raise argparse.ArgumentError(args.append_to, "Either an --append-to UF2 file or explicit --fs-start and --fs-size required!")
+
+    if not args.append_to.is_file():
+        raise RuntimeError(f"Could not find {args.append_to}")
+
+    py_decl = PyDecl(UF2Reader(args.append_to))
+    parsed = py_decl.parse()
+    block_devices = parsed.get("BlockDevice", [])
+    for block_device in block_devices:
+        if block_device.get("name") == args.fs_target:
+            args.fs_start = block_device.get("address")
+            args.fs_size = block_device.get("size")
+            print(f"Auto detected fs: {block_device.get("name")} 0x{args.fs_start:08x} ({args.fs_start}), {args.fs_size:,d} bytes ({print_size(args.fs_size)}).")
+            break
+
+block_count = math.ceil(args.fs_size / args.block_size)
+if block_count * args.block_size != args.fs_size:
+    print("image size should be a multiple of block size")
+    exit(1)
+
+output_filename = args.filename
+
+
+# Build a LittleFS filesystem by default if a directory is supplied
+if args.source_dir.is_dir():
+    if args.fs_type == "lfs":
+        lfs_data = lfs_filesystem(args)
+
+    # Write a .bin with *just* the filesystem
+    bin_filename = output_filename.with_suffix(".bin")
 
     with open(bin_filename, "wb") as f:
         f.write(lfs_data)
@@ -228,6 +234,8 @@ if args.source_dir.is_dir():
 
 elif args.source_dir.is_file():  # Open an existing filesystem binary
     lfs_data = open(args.source_dir, "rb").read()
+    if (src_size := len(lfs_data)) > args.fs_size:
+        raise RuntimeError(f"Source file too big for Block Device {args.fs_target} ({print_size(src_size)} > {print_size(args.fs_size)})!")
 
 else:
     raise RuntimeError("Source directory or file required!")
