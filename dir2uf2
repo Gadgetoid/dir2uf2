@@ -83,7 +83,7 @@ def bin_to_uf2(sections):
             for block_index in range(num_blocks):
                 ptr = DATA_SIZE * block_index
 
-                chunk = data[ptr:ptr + DATA_SIZE].rjust(DATA_SIZE, b"\x00")
+                chunk = data[ptr:ptr + DATA_SIZE].ljust(DATA_SIZE, b"\x00")
                 header = struct.pack(
                     b"<IIIIIIII",
                     UF2_MAGIC_START0, UF2_MAGIC_START1, flags,
