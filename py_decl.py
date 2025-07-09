@@ -198,7 +198,8 @@ class PyDecl:
     def parse(self):
         self.file.seek(0)
 
-        self.read_until(BI_MAGIC)
+        if self.read_until(BI_MAGIC) is None:
+            return None
 
         data = self.read_until(BI_END)
 
@@ -290,10 +291,15 @@ class PyDecl:
 
     def _read_until(self, delimiter=b"\x00"):
         while (chunk := self.file.read(len(delimiter))) != delimiter:
+            if len(chunk) == 0:
+                raise EOFError
             yield chunk
 
     def read_until(self, delimiter=b"\x00"):
-        return b"".join(self._read_until(delimiter))
+        try:
+            return b"".join(self._read_until(delimiter))
+        except EOFError:
+            return None
 
     def lookup_string(self, address):
         offset = self.addr_to_bin_offset(address)
