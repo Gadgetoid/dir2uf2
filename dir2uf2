@@ -48,7 +48,7 @@ def uf2_section_data(data):
             break
 
         if args.debug:
-            print(f"Block {block_no}/{num_blocks} addr {addr:08x} size {size}")
+            print(f"Block {block_no + 1}/{num_blocks} addr {addr:08x} size {size}")
 
         yield addr, data[offset + HEADER_SIZE:offset + HEADER_SIZE + DATA_SIZE]
 
